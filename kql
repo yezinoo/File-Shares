@@ -1,0 +1,65 @@
+Detection
+
+(1)Any Download file from any sources including emails (within
+(2)check signature of the files  with known signature bases or something
+(3)check files whether it contains any hidden executable or not
+(4) detect execution of downloaded files within 1 hours after arrival and looked for any dependency 
+(5)detect executed files which try to used smb, powershell or anything that can used for network activity
+
+
+
+
+let web_downloads = DeviceFileEvents
+| where Timestamp >= ago(7d)
+| where ActionType in ("FileCreated", "Downloaded")
+| extend FileOrigin = coalesce(FileOriginUrl, InitiatingProcessCommandLine)
+| where FileOrigin startswith "http" or FileOrigin startswith "https" or FileOrigin startswith "ftp"
+   or InitiatingProcessFileName in ("chrome.exe","msedge.exe","firefox.exe","iexplore.exe","wget.exe","curl.exe","bitsadmin.exe","powershell.exe","pwsh.exe")
+| project DeviceId, DeviceName, DownloadTime = Timestamp, FileName, FolderPath, SHA256, SignatureStatus, FileOrigin, InitiatingProcessFileName;
+let email_attachments = EmailAttachmentInfo
+| where Timestamp >= ago(7d)
+| project DeviceId = "", DeviceName = "", DownloadTime = Timestamp, FileName = AttachmentFileName, FolderPath = "", 
+          SHA256 = AttachmentSHA256, SignatureStatus = "", FileOrigin = "EmailAttachment", InitiatingProcessFileName = "Outlook.exe";
+let email_links = EmailUrlInfo
+| where Timestamp >= ago(7d)
+| where Url startswith "http"
+| project DeviceId = "", DeviceName = "", DownloadTime = Timestamp, FileName = tostring(UrlDomain), FolderPath = "", 
+          SHA256 = "", SignatureStatus = "", FileOrigin = strcat("EmailLink:", Url), InitiatingProcessFileName = "Outlook.exe";
+let inbound_files = union isfuzzy=true web_downloads, email_attachments, email_links;
+let suspicious_files = inbound_files
+| where SignatureStatus !in ("Valid", "Trusted") or FileName matches regex @".*\.(exe|dll|scr|bat|cmd|js|vbs|hta)$"
+| project DeviceId, DeviceName, DownloadTime, FileName, FolderPath, SHA256, FileOrigin, InitiatingProcessFileName;
+let recent_execs = DeviceProcessEvents
+| where Timestamp >= ago(7d)
+| project DeviceId, DeviceName, ProcessTime = Timestamp, ProcessName = FileName, ProcessCommandLine, InitiatingProcessFileName, SHA256;
+let exec_after_inbound = recent_execs
+| join kind=inner (suspicious_files) on DeviceId
+| where ProcessTime between (DownloadTime .. DownloadTime + 1h)
+| project DeviceId, DeviceName, ProcessTime, ProcessName, ProcessCommandLine, DownloadTime, FileName, FileOrigin, SHA256, FolderPath;
+let proc_net = DeviceNetworkEvents
+| where Timestamp >= ago(7d)
+| project DeviceId, NetTime = Timestamp, InitiatingProcessFileName, InitiatingProcessCommandLine, RemoteIP, RemoteUrl, RemotePort, Protocol;
+
+exec_after_inbound
+| join kind=leftouter (proc_net) on DeviceId
+| extend UsedSMB = RemotePort == 445,
+         UsedHTTP = RemotePort in (80,443) or RemoteUrl has_any ("http","https"),
+         UsedNetwork = isnotempty(RemoteIP) or isnotempty(RemoteUrl),
+         InvokedPowerShell = ProcessCommandLine has_any ("powershell","pwsh","Invoke-WebRequest","Invoke-Expression")
+| where UsedNetwork or UsedSMB or UsedHTTP or InvokedPowerShell
+| project
+    Timestamp = ProcessTime,
+    DeviceName,
+    ProcessName,
+    ProcessCommandLine,
+    DownloadTime,
+    SourceFile = FileName,
+    FileOrigin,
+    RemoteIP,
+    RemoteUrl,
+    RemotePort,
+    UsedSMB,
+    UsedHTTP,
+    InvokedPowerShell,
+    FolderPath
+| sort by Timestamp desc
